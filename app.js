@@ -1,4 +1,5 @@
 const CFG_KEY = "fdu2_web_config_v4";
+const SNAPSHOT_CACHE_KEY = "fdu2_last_good_snapshot_v1";
 const INTERNAL_CAMPUS_ID = 2;
 const DEFAULT_API_BASE = "https://circus-plenty-sur-keys.trycloudflare.com";
 
@@ -49,12 +50,24 @@ function setHint(text, kind = "warn") {
 
 function setAvailabilityProgress(text, state = "idle") {
   const el = $("availabilityProgress");
+  const bar = $("availabilityBar");
+  const pct = $("availabilityPercent");
   if (!el) return;
   el.classList.remove("running", "ok", "error");
   if (state === "running") el.classList.add("running");
   if (state === "ok") el.classList.add("ok");
   if (state === "error") el.classList.add("error");
   el.textContent = text;
+  if (bar && !bar.style.width) bar.style.width = "0%";
+  if (pct && !pct.textContent) pct.textContent = "0%";
+}
+
+function setAvailabilityPercent(percent) {
+  const bar = $("availabilityBar");
+  const pct = $("availabilityPercent");
+  const p = Math.max(0, Math.min(100, Number(percent) || 0));
+  if (bar) bar.style.width = `${p}%`;
+  if (pct) pct.textContent = `${p}%`;
 }
 
 function printResult(value) {
@@ -258,6 +271,40 @@ function getFeasibleVenues() {
   );
 }
 
+function countFeasibleFromSnapshot(snapshot) {
+  const venues = snapshot?.venues || [];
+  return venues.filter((v) => !v.error && Number(v.reservable_count || 0) > 0).length;
+}
+
+function saveGoodSnapshot(snapshot) {
+  if (!snapshot || countFeasibleFromSnapshot(snapshot) <= 0) return;
+  const payload = {
+    saved_at: new Date().toISOString(),
+    snapshot,
+  };
+  localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify(payload));
+}
+
+function loadCachedSnapshot(targetDate) {
+  const raw = localStorage.getItem(SNAPSHOT_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    const payload = JSON.parse(raw);
+    const snapshot = payload?.snapshot;
+    if (!snapshot) return null;
+
+    const q = String(targetDate || "").toLowerCase();
+    if (q) {
+      const td = String(snapshot?.target_date || "").toLowerCase();
+      const rd = String(snapshot?.resolved_target_date || "").toLowerCase();
+      if (td && td !== q && rd && rd !== q) return null;
+    }
+    return snapshot;
+  } catch (_e) {
+    return null;
+  }
+}
+
 function findVenueByName(name) {
   return availabilityList.find((v) => v.venue_name === name) || null;
 }
@@ -375,10 +422,36 @@ function renderAvailabilityTable(snapshot) {
   </table>`;
 }
 
-function applyAvailabilitySnapshot(snapshot) {
-  availabilityList = snapshot?.venues || [];
-  renderAvailabilityTable(snapshot || { venues: [] });
+function applyAvailabilitySnapshot(snapshot, opts = {}) {
+  const cfg = getCfg();
+  const fallbackToCache = opts.fallbackToCache !== false;
+  const normalized = snapshot
+    ? { ...snapshot, target_date: snapshot.target_date || cfg.targetDate }
+    : null;
+  const hasFeasible = countFeasibleFromSnapshot(normalized) > 0;
+
+  if (hasFeasible) {
+    availabilityList = normalized.venues || [];
+    saveGoodSnapshot(normalized);
+    renderAvailabilityTable(normalized);
+    populateVenueSelect();
+    return { source: "live", hasFeasible: true };
+  }
+
+  if (fallbackToCache) {
+    const cached = loadCachedSnapshot(cfg.targetDate);
+    if (cached && countFeasibleFromSnapshot(cached) > 0) {
+      availabilityList = cached.venues || [];
+      renderAvailabilityTable(cached);
+      populateVenueSelect();
+      return { source: "cache", hasFeasible: true };
+    }
+  }
+
+  availabilityList = normalized?.venues || [];
+  renderAvailabilityTable(normalized || { venues: [] });
   populateVenueSelect();
+  return { source: "live", hasFeasible: false };
 }
 
 function renderOrdersTable(orders) {
@@ -477,9 +550,18 @@ async function loadLatestAvailability() {
       query: { target_date: cfg.targetDate },
     });
     const snapshot = data?.snapshot || null;
-    if (snapshot?.venues) {
-      applyAvailabilitySnapshot(snapshot);
+    if (snapshot) {
+      const applied = applyAvailabilitySnapshot(snapshot, { fallbackToCache: true });
+      if (applied.source === "cache") {
+        setAvailabilityProgress("当前结果不可用，已回退到最近成功快照", "ok");
+      }
       return snapshot;
+    }
+    const cached = loadCachedSnapshot(cfg.targetDate);
+    if (cached) {
+      applyAvailabilitySnapshot(cached, { fallbackToCache: false });
+      setAvailabilityProgress("无新结果，使用本地缓存快照", "ok");
+      return cached;
     }
     return null;
   });
@@ -501,11 +583,13 @@ async function pollAvailabilityJob(jobId) {
     const total = Number(p.total || 0);
     const success = Number(p.success || 0);
     const failed = Number(p.failed || 0);
+    const percent = total > 0 ? Math.round((done * 100) / total) : 0;
 
     setAvailabilityProgress(
       `刷新中 ${done}/${total} | 成功 ${success} | 失败 ${failed}`,
       "running",
     );
+    setAvailabilityPercent(percent);
 
     const partialSnapshot = {
       resolved_target_date: job?.params?.resolved_target_date || "",
@@ -517,20 +601,44 @@ async function pollAvailabilityJob(jobId) {
       },
     };
     if ((partialSnapshot.venues || []).length) {
-      applyAvailabilitySnapshot(partialSnapshot);
+      const applied = applyAvailabilitySnapshot(partialSnapshot, { fallbackToCache: false });
+      if (!applied.hasFeasible) {
+        const cached = loadCachedSnapshot(getCfg().targetDate);
+        if (cached) {
+          applyAvailabilitySnapshot(cached, { fallbackToCache: false });
+        }
+      }
     }
 
     if (isTerminalStatus(job.status)) {
       availabilityJobId = null;
-      if (job.snapshot?.venues) {
-        applyAvailabilitySnapshot(job.snapshot);
-      }
-      if (job.status === "success") {
-        setAvailabilityProgress("刷新完成", "ok");
-      } else if (job.status === "partial_success") {
-        setAvailabilityProgress("部分成功，可用项已更新", "ok");
-      } else {
-        setAvailabilityProgress(`刷新失败: ${job.error || "unknown"}`, "error");
+      if (job.snapshot) {
+        const applied = applyAvailabilitySnapshot(job.snapshot, { fallbackToCache: true });
+        if (job.status === "success") {
+          setAvailabilityProgress("刷新完成", "ok");
+          setAvailabilityPercent(100);
+        } else if (job.status === "partial_success") {
+          if (applied.source === "cache") {
+            setAvailabilityProgress("部分成功，但无可用项；已回退到缓存可选项", "ok");
+          } else {
+            setAvailabilityProgress("部分成功，可用项已更新", "ok");
+          }
+          setAvailabilityPercent(100);
+        } else {
+          if (applied.source === "cache") {
+            setAvailabilityProgress("刷新失败，已回退到最近成功快照", "error");
+          } else {
+            setAvailabilityProgress(`刷新失败: ${job.error || "unknown"}`, "error");
+          }
+        }
+      } else if (job.status === "failed") {
+        const cached = loadCachedSnapshot(getCfg().targetDate);
+        if (cached) {
+          applyAvailabilitySnapshot(cached, { fallbackToCache: false });
+          setAvailabilityProgress("刷新失败，已回退到最近成功快照", "error");
+        } else {
+          setAvailabilityProgress(`刷新失败: ${job.error || "unknown"}`, "error");
+        }
       }
     }
 
@@ -555,6 +663,7 @@ async function startAvailabilityRefresh() {
     const btn = $("refreshAvailabilityBtn");
     if (btn) btn.disabled = true;
     setAvailabilityProgress("已提交刷新任务，准备抓取...", "running");
+    setAvailabilityPercent(0);
 
     try {
       const data = await callApi("/api/availability/refresh", {
@@ -845,6 +954,9 @@ async function initialLoad() {
     const latest = await loadLatestAvailability();
     if (!latest) {
       await startAvailabilityRefresh();
+    } else if (countFeasibleFromSnapshot(latest) > 0) {
+      setAvailabilityProgress("已加载最近总览", "ok");
+      setAvailabilityPercent(100);
     }
     await Promise.all([refreshJobs(), refreshOrders()]);
   } catch (_e) {
@@ -857,6 +969,7 @@ async function main() {
   attachEvents();
   setOpsEnabled(false);
   setAvailabilityProgress("待刷新");
+  setAvailabilityPercent(0);
   updateScheduleSelected();
   startPolling();
   await initialLoad();

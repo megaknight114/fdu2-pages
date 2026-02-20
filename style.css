@@ -341,6 +341,28 @@ tbody tr:hover {
   background: rgba(181, 51, 43, 0.11);
 }
 
+.progress-track {
+  width: 220px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid #c6b89f;
+  background: rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+}
+
+.progress-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #0b8d74, #085a4b);
+  transition: width 220ms ease;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "Cascadia Mono", monospace;
+  font-size: 12px;
+  color: #4f4a42;
+}
+
 @media (max-width: 960px) {
   .cols-5,
   .cols-4 {
