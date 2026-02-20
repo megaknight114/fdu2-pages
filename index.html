@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FDU Booking Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="bg"></div>
+    <main class="layout">
+      <header class="topbar">
+        <div>
+          <h1>FDU Booking Console</h1>
+          <p class="muted">实时查看可预约场馆、下单、撤销与定时任务</p>
+        </div>
+        <div class="livebox">
+          <span id="liveDot" class="dot"></span>
+          <span id="liveText">Offline</span>
+        </div>
+      </header>
+
+      <section class="card conn-card">
+        <h2>连接与账号</h2>
+        <div class="grid cols-4">
+          <label>
+            API Base
+            <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
+          </label>
+          <label>
+            Access Token
+            <input id="accessToken" type="password" placeholder="可选" />
+          </label>
+          <label>
+            用户名
+            <input id="username" type="text" placeholder="2430..." />
+          </label>
+          <label>
+            密码
+            <input id="password" type="password" placeholder="******" />
+          </label>
+        </div>
+        <div class="row">
+          <button id="saveConnBtn" class="btn primary">保存配置</button>
+          <button id="healthBtn" class="btn">测试连接</button>
+          <label class="inline">
+            <input id="autoRefresh" type="checkbox" checked />
+            自动刷新
+          </label>
+          <label class="inline">
+            刷新周期(ms)
+            <select id="refreshMs">
+              <option value="2000">2000</option>
+              <option value="5000" selected>5000</option>
+              <option value="10000">10000</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>场馆与预约</h2>
+        <div class="grid cols-5">
+          <label>
+            校区ID
+            <input id="campusId" type="number" value="2" min="1" />
+          </label>
+          <label>
+            日期
+            <input id="targetDate" type="text" value="tomorrow" placeholder="tomorrow or YYYY-MM-DD" />
+          </label>
+          <label>
+            场馆
+            <select id="venueSelect"></select>
+          </label>
+          <label>
+            时段
+            <select id="slotSelect"></select>
+          </label>
+          <label>
+            验证码重试
+            <input id="captchaRetries" type="number" value="5" min="1" max="10" />
+          </label>
+        </div>
+        <div class="row">
+          <button id="loadVenuesBtn" class="btn">刷新场馆</button>
+          <button id="loadSlotsBtn" class="btn">刷新时段</button>
+          <button id="bookBtn" class="btn primary">立即预约</button>
+        </div>
+        <pre id="bookResult" class="console"></pre>
+      </section>
+
+      <section class="card">
+        <h2>定时任务</h2>
+        <div class="grid cols-4">
+          <label>
+            执行时间
+            <input id="runAt" type="datetime-local" />
+          </label>
+          <label>
+            场馆名(核验)
+            <input id="venueName" type="text" value="杨詠曼楼琴房" />
+          </label>
+          <label>
+            指定时段号(0=任意)
+            <input id="slotIndex" type="number" value="0" min="0" />
+          </label>
+          <div class="align-end">
+            <button id="scheduleBtn" class="btn">创建定时任务</button>
+          </div>
+        </div>
+        <div id="jobsWrap" class="table-wrap"></div>
+      </section>
+
+      <section class="card">
+        <h2>我的订单（含撤销）</h2>
+        <div class="row">
+          <button id="refreshOrdersBtn" class="btn">刷新订单</button>
+        </div>
+        <div id="ordersWrap" class="table-wrap"></div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
