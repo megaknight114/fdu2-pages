@@ -305,6 +305,35 @@ tbody tr:hover {
   border: 1px solid rgba(11, 141, 116, 0.26);
 }
 
+.status-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #bcb199;
+  color: #5b564d;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.status-pill.running {
+  color: #0a5d4d;
+  border-color: rgba(11, 141, 116, 0.36);
+  background: rgba(11, 141, 116, 0.11);
+}
+
+.status-pill.ok {
+  color: #14672c;
+  border-color: rgba(30, 138, 59, 0.4);
+  background: rgba(30, 138, 59, 0.12);
+}
+
+.status-pill.error {
+  color: #8e2822;
+  border-color: rgba(181, 51, 43, 0.4);
+  background: rgba(181, 51, 43, 0.11);
+}
+
 @media (max-width: 960px) {
   .cols-5,
   .cols-4 {

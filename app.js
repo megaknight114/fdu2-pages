@@ -12,6 +12,7 @@ const busy = {
   schedule: false,
   cancelJob: false,
 };
+const inflight = {};
 
 let pollTimer = null;
 let pollTick = 0;
@@ -40,6 +41,16 @@ function setHint(text, kind = "warn") {
   if (!el) return;
   el.classList.remove("warn", "ok");
   el.classList.add(kind === "ok" ? "ok" : "warn");
+  el.textContent = text;
+}
+
+function setAvailabilityProgress(text, state = "idle") {
+  const el = $("availabilityProgress");
+  if (!el) return;
+  el.classList.remove("running", "ok", "error");
+  if (state === "running") el.classList.add("running");
+  if (state === "ok") el.classList.add("ok");
+  if (state === "error") el.classList.add("error");
   el.textContent = text;
 }
 
@@ -196,13 +207,17 @@ async function callApi(path, opts = {}) {
 }
 
 async function guarded(name, fn) {
-  if (busy[name]) return null;
-  busy[name] = true;
-  try {
-    return await fn();
-  } finally {
-    busy[name] = false;
-  }
+  if (inflight[name]) return inflight[name];
+  inflight[name] = (async () => {
+    busy[name] = true;
+    try {
+      return await fn();
+    } finally {
+      busy[name] = false;
+      inflight[name] = null;
+    }
+  })();
+  return inflight[name];
 }
 
 function credentialQuery() {
@@ -408,22 +423,38 @@ async function checkHealth() {
 }
 
 async function refreshAvailability() {
+  if (inflight.availability) {
+    setAvailabilityProgress("总览刷新进行中...", "running");
+  }
   return guarded("availability", async () => {
     if (!apiReady) throw new Error("后端未连通，请先测试连接");
+    const btn = $("refreshAvailabilityBtn");
+    const startedAt = Date.now();
+    if (btn) btn.disabled = true;
+    setAvailabilityProgress("正在刷新总览：抓取场馆与时段...", "running");
     const cfg = getCfg();
-    const data = await callApi("/api/availability", {
-      query: {
-        campus_id: INTERNAL_CAMPUS_ID,
-        target_date: cfg.targetDate,
-        parallel: cfg.useParallel,
-        max_workers: cfg.maxWorkers,
-        ...credentialQuery(),
-      },
-    });
-    availabilityList = data.venues || [];
-    renderAvailabilityTable(data);
-    populateVenueSelect();
-    return data;
+    try {
+      const data = await callApi("/api/availability", {
+        query: {
+          campus_id: INTERNAL_CAMPUS_ID,
+          target_date: cfg.targetDate,
+          parallel: cfg.useParallel,
+          max_workers: cfg.maxWorkers,
+          ...credentialQuery(),
+        },
+      });
+      availabilityList = data.venues || [];
+      renderAvailabilityTable(data);
+      populateVenueSelect();
+      const ms = Date.now() - startedAt;
+      setAvailabilityProgress(`刷新完成 (${(ms / 1000).toFixed(1)}s)`, "ok");
+      return data;
+    } catch (e) {
+      setAvailabilityProgress(`刷新失败: ${e.message}`, "error");
+      throw e;
+    } finally {
+      if (btn) btn.disabled = !apiReady;
+    }
   });
 }
 
@@ -555,7 +586,10 @@ function attachEvents() {
   $("refreshAvailabilityBtn").addEventListener("click", async () => {
     try {
       const data = await refreshAvailability();
-      printResult({ date: data.resolved_target_date, venues: data.venues.length });
+      printResult({
+        date: data?.resolved_target_date || "",
+        venues: (data?.venues || []).length,
+      });
     } catch (e) {
       printResult(`刷新总览失败: ${e.message}`);
     }
@@ -691,6 +725,7 @@ async function main() {
   loadCfg();
   attachEvents();
   setOpsEnabled(false);
+  setAvailabilityProgress("待刷新");
   startPolling();
   await initialLoad();
 }
