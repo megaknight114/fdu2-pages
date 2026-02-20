@@ -199,6 +199,12 @@ function normalizeApiErrorText(text) {
   if (trimmed.startsWith("<!DOCTYPE html>") || trimmed.startsWith("<html")) {
     return "API Base 指向了网页而不是后端 API，请检查地址是否正确。";
   }
+  if (trimmed.includes("login_failed")) {
+    return "登录失败，请检查用户名/密码，或稍后重试。";
+  }
+  if (trimmed.includes("bootstrap_timeout")) {
+    return "登录阶段超时，请稍后重试（系统侧偶发）。";
+  }
   if (trimmed.length > 220) return `${trimmed.slice(0, 220)}...`;
   return trimmed;
 }
