@@ -1,9 +1,9 @@
-const CFG_KEY = "fdu2_web_config_v2";
+const CFG_KEY = "fdu2_web_config_v3";
+const INTERNAL_CAMPUS_ID = 2;
 
 const busy = {
   health: false,
-  venues: false,
-  slots: false,
+  availability: false,
   book: false,
   orders: false,
   cancelOrder: false,
@@ -15,6 +15,7 @@ const busy = {
 let pollTimer = null;
 let pollTick = 0;
 let apiReady = false;
+let availabilityList = [];
 
 function $(id) {
   return document.getElementById(id);
@@ -51,47 +52,28 @@ function printResult(value) {
   }
 }
 
-function setOpsEnabled(enabled) {
-  [
-    "loadVenuesBtn",
-    "loadSlotsBtn",
-    "bookBtn",
-    "refreshOrdersBtn",
-    "scheduleBtn",
-  ].forEach((id) => {
-    const el = $(id);
-    if (el) el.disabled = !enabled;
-  });
+function normalizeBase(raw) {
+  return String(raw || "").trim().replace(/\/$/, "");
 }
 
 function isGitHubPagesSite() {
   return /github\.io$/i.test(window.location.hostname);
 }
 
-function normalizeBase(raw) {
-  return String(raw || "").trim().replace(/\/$/, "");
-}
-
 function validateApiBase(base) {
-  if (!base) {
-    return "请先填写 API Base（例如 https://api.example.com）";
-  }
-
+  if (!base) return "请先填写 API Base（例如 https://api.example.com）";
   let parsed;
   try {
     parsed = new URL(base);
   } catch (_e) {
     return "API Base 不是合法 URL";
   }
-
   if (window.location.protocol === "https:" && parsed.protocol !== "https:") {
     return "当前页面是 HTTPS，API Base 也必须是 HTTPS（浏览器会拦截 https->http）";
   }
-
   if (isGitHubPagesSite() && parsed.hostname.endsWith("github.io")) {
     return "API Base 不能填 GitHub Pages 地址，需要填你的后端服务地址";
   }
-
   return "";
 }
 
@@ -103,7 +85,8 @@ function getCfg() {
     password: $("password").value,
     autoRefresh: $("autoRefresh").checked,
     refreshMs: parseInt($("refreshMs").value, 10) || 5000,
-    campusId: parseInt($("campusId").value, 10) || 2,
+    useParallel: $("useParallel").checked,
+    maxWorkers: parseInt($("maxWorkers").value, 10) || 3,
     targetDate: $("targetDate").value.trim() || "tomorrow",
     venueName: $("venueName").value.trim() || "杨詠曼楼琴房",
     slotIndex: parseInt($("slotIndex").value, 10) || 0,
@@ -118,7 +101,8 @@ function setCfg(cfg) {
   $("password").value = cfg.password || "";
   $("autoRefresh").checked = cfg.autoRefresh !== false;
   $("refreshMs").value = String(cfg.refreshMs || 5000);
-  $("campusId").value = String(cfg.campusId || 2);
+  $("useParallel").checked = cfg.useParallel !== false;
+  $("maxWorkers").value = String(cfg.maxWorkers || 3);
   $("targetDate").value = cfg.targetDate || "tomorrow";
   $("venueName").value = cfg.venueName || "杨詠曼楼琴房";
   $("slotIndex").value = String(cfg.slotIndex || 0);
@@ -136,7 +120,7 @@ function saveCfg() {
     setLive(false, "Need valid API Base");
     printResult(`配置已保存，但当前不可用: ${invalid}`);
   } else {
-    setHint("配置已保存，点击“测试连接”验证。", "ok");
+    setHint("配置已保存，点击“测试连接”。", "ok");
     printResult("配置已保存");
   }
   startPolling();
@@ -145,13 +129,13 @@ function saveCfg() {
 function loadCfg() {
   const raw = localStorage.getItem(CFG_KEY);
   if (!raw) {
-    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000 });
+    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
     return;
   }
   try {
     setCfg(JSON.parse(raw));
   } catch (_e) {
-    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000 });
+    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
   }
 }
 
@@ -170,17 +154,31 @@ function buildUrl(path, query) {
   return url.toString();
 }
 
+function normalizeApiErrorText(text) {
+  const trimmed = String(text || "").trim();
+  if (trimmed.startsWith("<!DOCTYPE html>") || trimmed.startsWith("<html")) {
+    return "API Base 指向了网页而不是后端 API，请检查地址是否正确。";
+  }
+  if (trimmed.length > 220) return `${trimmed.slice(0, 220)}...`;
+  return trimmed;
+}
+
 async function callApi(path, opts = {}) {
   const cfg = getCfg();
   const headers = {};
   if (cfg.accessToken) headers["x-access-token"] = cfg.accessToken;
   if (opts.body !== undefined) headers["content-type"] = "application/json";
 
-  const res = await fetch(buildUrl(path, opts.query), {
-    method: opts.method || "GET",
-    headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
+  let res;
+  try {
+    res = await fetch(buildUrl(path, opts.query), {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    });
+  } catch (e) {
+    throw new Error(`网络请求失败: ${e.message}`);
+  }
 
   const contentType = res.headers.get("content-type") || "";
   const isJson = contentType.includes("application/json");
@@ -188,7 +186,8 @@ async function callApi(path, opts = {}) {
 
   if (!res.ok) {
     const detail = typeof payload === "object" && payload ? payload.detail : payload;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    const text = typeof detail === "string" ? detail : JSON.stringify(detail);
+    throw new Error(normalizeApiErrorText(text));
   }
   return payload;
 }
@@ -205,75 +204,107 @@ async function guarded(name, fn) {
 
 function credentialQuery() {
   const cfg = getCfg();
-  return {
-    username: cfg.username,
-    password: cfg.password,
-  };
+  return { username: cfg.username, password: cfg.password };
 }
 
-function selectedVenue() {
+function setOpsEnabled(enabled) {
+  ["refreshAvailabilityBtn", "bookBtn", "refreshOrdersBtn", "scheduleBtn"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !enabled;
+  });
+}
+
+function findVenueByName(name) {
+  return availabilityList.find((v) => v.venue_name === name) || null;
+}
+
+function populateVenueSelect() {
   const sel = $("venueSelect");
-  const venueOrder = parseInt(sel.value, 10) || 1;
-  const venueName = sel.options[sel.selectedIndex]?.dataset?.name || "";
-  return { venueOrder, venueName };
-}
-
-function selectedSlot() {
-  const sel = $("slotSelect");
-  const slotIndex = parseInt(sel.value, 10) || 0;
-  return { slotIndex };
-}
-
-function renderVenues(venues) {
-  const sel = $("venueSelect");
-  const prev = parseInt(sel.value, 10);
+  const prev = sel.value;
   sel.innerHTML = "";
 
-  if (!venues || !venues.length) {
+  if (!availabilityList.length) {
     const op = document.createElement("option");
     op.value = "";
-    op.textContent = "无场馆";
+    op.textContent = "暂无可选场馆";
+    sel.appendChild(op);
+    populateSlotSelect();
+    return;
+  }
+
+  availabilityList.forEach((v) => {
+    const op = document.createElement("option");
+    op.value = v.venue_name;
+    op.textContent = `${v.venue_name} (${v.reservable_count || 0})`;
+    if (prev && prev === v.venue_name) op.selected = true;
+    sel.appendChild(op);
+  });
+
+  if (!sel.value) sel.value = availabilityList[0].venue_name;
+  populateSlotSelect();
+}
+
+function populateSlotSelect() {
+  const sel = $("slotSelect");
+  const venueName = $("venueSelect").value;
+  const venue = findVenueByName(venueName);
+  sel.innerHTML = "";
+
+  if (!venue || !venue.reservable_slots || !venue.reservable_slots.length) {
+    const op = document.createElement("option");
+    op.value = "0";
+    op.textContent = "无可预约时段";
     sel.appendChild(op);
     return;
   }
 
-  venues.forEach((v) => {
+  venue.reservable_slots.forEach((s, idx) => {
     const op = document.createElement("option");
-    op.value = String(v.venue_order);
-    op.textContent = `#${v.venue_order} ${v.venue_name}`;
-    op.dataset.name = v.venue_name || "";
-    if (prev && prev === v.venue_order) op.selected = true;
+    op.value = String(s.slot_index);
+    op.textContent = `#${s.slot_index} ${s.time_text}`;
+    if (idx === 0) op.selected = true;
     sel.appendChild(op);
   });
 }
 
-function renderSlots(slots) {
-  const sel = $("slotSelect");
-  const prev = parseInt(sel.value, 10);
-  sel.innerHTML = "";
+function renderAvailabilityTable(data) {
+  const wrap = $("availabilityWrap");
+  const meta = $("availabilityMeta");
+  const resolvedDate = data?.resolved_target_date || "";
+  const venues = data?.venues || [];
+  const okCount = venues.filter((v) => !v.error).length;
 
-  if (!slots || !slots.length) {
-    const op = document.createElement("option");
-    op.value = "0";
-    op.textContent = "无时段";
-    sel.appendChild(op);
+  meta.textContent = `日期: ${resolvedDate} | 场馆: ${venues.length} | 可抓取: ${okCount}`;
+
+  if (!venues.length) {
+    wrap.innerHTML = `<div style="padding:10px;color:#5b564d;">暂无数据</div>`;
     return;
   }
 
-  let firstReservable = null;
-  slots.forEach((s) => {
-    const op = document.createElement("option");
-    op.value = String(s.slot_index);
-    const mark = s.reservable ? "可约" : "不可约";
-    op.textContent = `[${mark}] #${s.slot_index} ${s.time_text} ${s.venue_text}`.trim();
-    if (prev && prev === s.slot_index) op.selected = true;
-    if (firstReservable === null && s.reservable) firstReservable = s.slot_index;
-    sel.appendChild(op);
-  });
+  const rows = venues
+    .map((v) => {
+      const slots = (v.reservable_slots || []).map((s) => s.time_text).filter(Boolean);
+      const chips = slots.length
+        ? slots.map((t) => `<span class="slot-chip">${escapeHtml(t)}</span>`).join("")
+        : "<span class='muted'>无</span>";
+      const status = v.error
+        ? `<span class="tag no">失败</span>`
+        : `<span class="tag ok">${v.reservable_count || 0} 可约</span>`;
 
-  if (!prev && firstReservable !== null) {
-    sel.value = String(firstReservable);
-  }
+      return `<tr>
+        <td>${escapeHtml(v.venue_name)}</td>
+        <td>${status}</td>
+        <td>${chips}</td>
+      </tr>`;
+    })
+    .join("");
+
+  wrap.innerHTML = `<table>
+    <thead>
+      <tr><th>场馆名</th><th>状态</th><th>可预约时段</th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 function escapeHtml(input) {
@@ -336,7 +367,7 @@ function renderJobsTable(jobs) {
         <td><span class="tag ${statusClass}">${escapeHtml(j.status)}</span></td>
         <td>${escapeHtml(j.run_at)}</td>
         <td>${escapeHtml(j.request?.target_date || "")}</td>
-        <td>${escapeHtml(j.request?.venue_order || "")}</td>
+        <td>${escapeHtml(j.request?.venue_name || "")}</td>
         <td>${escapeHtml(j.request?.slot_index || "0")}</td>
         <td>${cancelBtn}</td>
       </tr>`;
@@ -345,7 +376,7 @@ function renderJobsTable(jobs) {
 
   wrap.innerHTML = `<table>
     <thead>
-      <tr><th>任务ID</th><th>状态</th><th>执行时间</th><th>目标日期</th><th>场馆序号</th><th>时段号</th><th>操作</th></tr>
+      <tr><th>任务ID</th><th>状态</th><th>执行时间</th><th>目标日期</th><th>场馆名</th><th>时段号</th><th>操作</th></tr>
     </thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -357,7 +388,6 @@ async function checkHealth() {
       const cfg = getCfg();
       const invalid = validateApiBase(cfg.apiBase);
       if (invalid) throw new Error(invalid);
-
       const data = await callApi("/api/health");
       apiReady = true;
       setOpsEnabled(true);
@@ -374,30 +404,22 @@ async function checkHealth() {
   });
 }
 
-async function loadVenues() {
-  return guarded("venues", async () => {
+async function refreshAvailability() {
+  return guarded("availability", async () => {
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
     const cfg = getCfg();
-    const data = await callApi("/api/venues", {
-      query: { campus_id: cfg.campusId, ...credentialQuery() },
-    });
-    renderVenues(data.venues || []);
-    return data;
-  });
-}
-
-async function loadSlots() {
-  return guarded("slots", async () => {
-    const cfg = getCfg();
-    const { venueOrder } = selectedVenue();
-    const data = await callApi("/api/slots", {
+    const data = await callApi("/api/availability", {
       query: {
-        campus_id: cfg.campusId,
-        venue_order: venueOrder,
+        campus_id: INTERNAL_CAMPUS_ID,
         target_date: cfg.targetDate,
+        parallel: cfg.useParallel,
+        max_workers: cfg.maxWorkers,
         ...credentialQuery(),
       },
     });
-    renderSlots(data.slots || []);
+    availabilityList = data.venues || [];
+    renderAvailabilityTable(data);
+    populateVenueSelect();
     return data;
   });
 }
@@ -406,24 +428,27 @@ async function bookOnce() {
   return guarded("book", async () => {
     if (!apiReady) throw new Error("后端未连通，请先测试连接");
     const cfg = getCfg();
-    const { venueOrder, venueName } = selectedVenue();
-    const { slotIndex } = selectedSlot();
+    const venueName = $("venueSelect").value;
+    const venue = findVenueByName(venueName);
+    if (!venue) throw new Error("请先刷新总览并选择场馆");
+
+    const slotIndex = parseInt($("slotSelect").value, 10) || 0;
+    if (!(slotIndex > 0)) throw new Error("当前场馆没有可预约时段");
 
     const payload = {
       username: cfg.username || null,
       password: cfg.password || null,
-      campus_id: cfg.campusId,
-      venue_order: venueOrder,
+      campus_id: INTERNAL_CAMPUS_ID,
+      venue_order: venue.venue_order,
       target_date: cfg.targetDate,
       slot_index: slotIndex,
-      venue_name: venueName || cfg.venueName,
+      venue_name: venue.venue_name,
       captcha_retries: cfg.captchaRetries,
     };
 
     const data = await callApi("/api/book", { method: "POST", body: payload });
     printResult(data);
-    await refreshOrders();
-    await refreshJobs();
+    await Promise.all([refreshOrders(), refreshJobs(), refreshAvailability()]);
     return data;
   });
 }
@@ -465,22 +490,23 @@ function normalizeRunAt(value) {
 async function scheduleJob() {
   return guarded("schedule", async () => {
     if (!apiReady) throw new Error("后端未连通，请先测试连接");
-
     const runAt = normalizeRunAt($("runAt").value);
     if (!runAt) throw new Error("请先填写执行时间");
 
     const cfg = getCfg();
-    const { venueOrder, venueName } = selectedVenue();
-    const slotIndex = parseInt($("slotIndex").value, 10) || 0;
+    const venueName = $("venueSelect").value;
+    const venue = findVenueByName(venueName);
+    if (!venue) throw new Error("请先刷新总览并选择场馆");
 
+    const slotIndex = parseInt($("slotIndex").value, 10) || 0;
     const payload = {
       username: cfg.username || null,
       password: cfg.password || null,
-      campus_id: cfg.campusId,
-      venue_order: venueOrder,
+      campus_id: INTERNAL_CAMPUS_ID,
+      venue_order: venue.venue_order,
       target_date: cfg.targetDate,
       slot_index: slotIndex,
-      venue_name: venueName || cfg.venueName,
+      venue_name: venue.venue_name,
       captcha_retries: cfg.captchaRetries,
       run_at: runAt,
     };
@@ -523,23 +549,17 @@ function attachEvents() {
     }
   });
 
-  $("loadVenuesBtn").addEventListener("click", async () => {
+  $("refreshAvailabilityBtn").addEventListener("click", async () => {
     try {
-      const data = await loadVenues();
-      printResult({ venues: data.venues || [] });
-      await loadSlots();
+      const data = await refreshAvailability();
+      printResult({ date: data.resolved_target_date, venues: data.venues.length });
     } catch (e) {
-      printResult(`刷新场馆失败: ${e.message}`);
+      printResult(`刷新总览失败: ${e.message}`);
     }
   });
 
-  $("loadSlotsBtn").addEventListener("click", async () => {
-    try {
-      const data = await loadSlots();
-      printResult({ target_date: data.target_date, slots: data.slots || [] });
-    } catch (e) {
-      printResult(`刷新时段失败: ${e.message}`);
-    }
+  $("venueSelect").addEventListener("change", () => {
+    populateSlotSelect();
   });
 
   $("bookBtn").addEventListener("click", async () => {
@@ -597,8 +617,10 @@ function attachEvents() {
     }
   });
 
-  $("autoRefresh").addEventListener("change", startPolling);
-  $("refreshMs").addEventListener("change", startPolling);
+  ["autoRefresh", "refreshMs", "useParallel", "maxWorkers", "targetDate"].forEach((id) => {
+    $(id).addEventListener("change", startPolling);
+  });
+
   $("apiBase").addEventListener("change", () => {
     const invalid = validateApiBase(getCfg().apiBase);
     if (invalid) {
@@ -626,7 +648,7 @@ function startPolling() {
     try {
       await checkHealth();
       if (!apiReady) return;
-      await refreshJobs();
+      await Promise.all([refreshAvailability(), refreshJobs()]);
       if (pollTick % Math.max(1, Math.floor(30000 / interval)) === 0) {
         await refreshOrders();
       }
@@ -656,10 +678,7 @@ async function initialLoad() {
   }
 
   try {
-    await loadVenues();
-    await loadSlots();
-    await refreshJobs();
-    await refreshOrders();
+    await Promise.all([refreshAvailability(), refreshJobs(), refreshOrders()]);
   } catch (_e) {
     // user can retry manually
   }

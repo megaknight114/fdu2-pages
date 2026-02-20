@@ -18,7 +18,7 @@
       <header class="topbar">
         <div>
           <h1>FDU Booking Console</h1>
-          <p class="muted">实时查看可预约场馆、下单、撤销与定时任务</p>
+          <p class="muted">场馆可约时段总览、按场馆名预约、订单管理与定时任务</p>
         </div>
         <div class="livebox">
           <span id="liveDot" class="dot"></span>
@@ -49,52 +49,58 @@
         <div class="row">
           <button id="saveConnBtn" class="btn primary">保存配置</button>
           <button id="healthBtn" class="btn">测试连接</button>
-          <label class="inline">
-            <input id="autoRefresh" type="checkbox" checked />
-            自动刷新
-          </label>
-          <label class="inline">
-            刷新周期(ms)
+          <label class="inline"><input id="autoRefresh" type="checkbox" checked />自动刷新</label>
+          <label class="inline">刷新周期(ms)
             <select id="refreshMs">
-              <option value="2000">2000</option>
+              <option value="3000">3000</option>
               <option value="5000" selected>5000</option>
               <option value="10000">10000</option>
             </select>
           </label>
+          <label class="inline"><input id="useParallel" type="checkbox" checked />并行抓取可用时段</label>
+          <label class="inline">并行数
+            <select id="maxWorkers">
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </label>
         </div>
-        <p id="connHint" class="hint warn">
-          先填写可公网访问的后端 API Base（需支持 /api/*）。在 GitHub Pages 页面中，API Base 必须是 HTTPS。
-        </p>
+        <p id="connHint" class="hint warn">先填写可公网访问的后端 API Base（需支持 /api/*）。GitHub Pages 页面中 API Base 必须是 HTTPS。</p>
       </section>
 
       <section class="card">
-        <h2>场馆与预约</h2>
-        <div class="grid cols-5">
+        <h2>场馆可用时段总览</h2>
+        <div class="row">
           <label>
-            校区ID
-            <input id="campusId" type="number" value="2" min="1" />
+            目标日期
+            <input id="targetDate" type="text" value="tomorrow" placeholder="tomorrow 或 YYYY-MM-DD" />
           </label>
+          <button id="refreshAvailabilityBtn" class="btn primary">刷新总览</button>
+          <span id="availabilityMeta" class="muted"></span>
+        </div>
+        <div id="availabilityWrap" class="table-wrap big"></div>
+      </section>
+
+      <section class="card">
+        <h2>立即预约（按场馆名）</h2>
+        <div class="grid cols-4">
           <label>
-            日期
-            <input id="targetDate" type="text" value="tomorrow" placeholder="tomorrow or YYYY-MM-DD" />
-          </label>
-          <label>
-            场馆
+            场馆名
             <select id="venueSelect"></select>
           </label>
           <label>
-            时段
+            可选时段
             <select id="slotSelect"></select>
           </label>
           <label>
             验证码重试
             <input id="captchaRetries" type="number" value="5" min="1" max="10" />
           </label>
-        </div>
-        <div class="row">
-          <button id="loadVenuesBtn" class="btn">刷新场馆</button>
-          <button id="loadSlotsBtn" class="btn">刷新时段</button>
-          <button id="bookBtn" class="btn primary">立即预约</button>
+          <div class="align-end">
+            <button id="bookBtn" class="btn primary">立即预约</button>
+          </div>
         </div>
         <pre id="bookResult" class="console"></pre>
       </section>
