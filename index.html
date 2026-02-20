@@ -113,14 +113,10 @@
             执行时间
             <input id="runAt" type="datetime-local" />
           </label>
-          <label>
-            场馆名(核验)
-            <input id="venueName" type="text" value="杨詠曼楼琴房" />
-          </label>
-          <label>
-            指定时段号(0=任意)
-            <input id="slotIndex" type="number" value="0" min="0" />
-          </label>
+          <div class="card-inline">
+            <div class="muted">使用上方“立即预约”里已选择的场馆和时段</div>
+            <div id="scheduleSelected" class="muted">场馆: - | 时段: -</div>
+          </div>
           <div class="align-end">
             <button id="scheduleBtn" class="btn">创建定时任务</button>
           </div>

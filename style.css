@@ -99,6 +99,13 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.card-inline {
+  border: 1px dashed #cfbea5;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
 .grid {
   display: grid;
   gap: 10px;
