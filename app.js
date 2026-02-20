@@ -1,4 +1,4 @@
-const CFG_KEY = "fdu2_web_config_v1";
+const CFG_KEY = "fdu2_web_config_v2";
 
 const busy = {
   health: false,
@@ -14,6 +14,7 @@ const busy = {
 
 let pollTimer = null;
 let pollTick = 0;
+let apiReady = false;
 
 function $(id) {
   return document.getElementById(id);
@@ -27,10 +28,17 @@ function setLive(ok, text) {
   const dot = $("liveDot");
   const liveText = $("liveText");
   if (!dot || !liveText) return;
-
   dot.classList.remove("ok", "bad");
   dot.classList.add(ok ? "ok" : "bad");
   liveText.textContent = text || (ok ? "Online" : "Offline");
+}
+
+function setHint(text, kind = "warn") {
+  const el = $("connHint");
+  if (!el) return;
+  el.classList.remove("warn", "ok");
+  el.classList.add(kind === "ok" ? "ok" : "warn");
+  el.textContent = text;
 }
 
 function printResult(value) {
@@ -43,9 +51,53 @@ function printResult(value) {
   }
 }
 
+function setOpsEnabled(enabled) {
+  [
+    "loadVenuesBtn",
+    "loadSlotsBtn",
+    "bookBtn",
+    "refreshOrdersBtn",
+    "scheduleBtn",
+  ].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !enabled;
+  });
+}
+
+function isGitHubPagesSite() {
+  return /github\.io$/i.test(window.location.hostname);
+}
+
+function normalizeBase(raw) {
+  return String(raw || "").trim().replace(/\/$/, "");
+}
+
+function validateApiBase(base) {
+  if (!base) {
+    return "请先填写 API Base（例如 https://api.example.com）";
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(base);
+  } catch (_e) {
+    return "API Base 不是合法 URL";
+  }
+
+  if (window.location.protocol === "https:" && parsed.protocol !== "https:") {
+    return "当前页面是 HTTPS，API Base 也必须是 HTTPS（浏览器会拦截 https->http）";
+  }
+
+  if (isGitHubPagesSite() && parsed.hostname.endsWith("github.io")) {
+    return "API Base 不能填 GitHub Pages 地址，需要填你的后端服务地址";
+  }
+
+  return "";
+}
+
 function getCfg() {
   return {
-    apiBase: $("apiBase").value.trim() || window.location.origin,
+    apiBase: normalizeBase($("apiBase").value),
     accessToken: $("accessToken").value.trim(),
     username: $("username").value.trim(),
     password: $("password").value,
@@ -60,7 +112,7 @@ function getCfg() {
 }
 
 function setCfg(cfg) {
-  $("apiBase").value = cfg.apiBase || window.location.origin;
+  $("apiBase").value = normalizeBase(cfg.apiBase || "");
   $("accessToken").value = cfg.accessToken || "";
   $("username").value = cfg.username || "";
   $("password").value = cfg.password || "";
@@ -76,27 +128,39 @@ function setCfg(cfg) {
 function saveCfg() {
   const cfg = getCfg();
   localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
-  printResult("配置已保存");
+  const invalid = validateApiBase(cfg.apiBase);
+  if (invalid) {
+    apiReady = false;
+    setOpsEnabled(false);
+    setHint(invalid, "warn");
+    setLive(false, "Need valid API Base");
+    printResult(`配置已保存，但当前不可用: ${invalid}`);
+  } else {
+    setHint("配置已保存，点击“测试连接”验证。", "ok");
+    printResult("配置已保存");
+  }
   startPolling();
 }
 
 function loadCfg() {
   const raw = localStorage.getItem(CFG_KEY);
   if (!raw) {
-    setCfg({ apiBase: window.location.origin, autoRefresh: true, refreshMs: 5000 });
+    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000 });
     return;
   }
   try {
     setCfg(JSON.parse(raw));
   } catch (_e) {
-    setCfg({ apiBase: window.location.origin, autoRefresh: true, refreshMs: 5000 });
+    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000 });
   }
 }
 
 function buildUrl(path, query) {
   const cfg = getCfg();
-  const base = cfg.apiBase.replace(/\/$/, "");
-  const url = new URL(`${base}${path}`);
+  const invalid = validateApiBase(cfg.apiBase);
+  if (invalid) throw new Error(invalid);
+
+  const url = new URL(`${cfg.apiBase}${path}`);
   if (query) {
     Object.entries(query).forEach(([k, v]) => {
       if (v === undefined || v === null || v === "") return;
@@ -157,8 +221,7 @@ function selectedVenue() {
 function selectedSlot() {
   const sel = $("slotSelect");
   const slotIndex = parseInt(sel.value, 10) || 0;
-  const slotText = sel.options[sel.selectedIndex]?.textContent || "";
-  return { slotIndex, slotText };
+  return { slotIndex };
 }
 
 function renderVenues(venues) {
@@ -248,9 +311,7 @@ function renderOrdersTable(orders) {
 
   wrap.innerHTML = `<table>
     <thead>
-      <tr>
-        <th>订单号</th><th>类别</th><th>场馆</th><th>日期</th><th>时段</th><th>状态</th><th>操作</th>
-      </tr>
+      <tr><th>订单号</th><th>类别</th><th>场馆</th><th>日期</th><th>时段</th><th>状态</th><th>操作</th></tr>
     </thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -265,7 +326,7 @@ function renderJobsTable(jobs) {
 
   const rows = jobs
     .map((j) => {
-      const statusClass = j.status === "success" ? "ok" : j.status === "scheduled" ? "ok" : "no";
+      const statusClass = j.status === "success" || j.status === "scheduled" ? "ok" : "no";
       const canCancel = j.status === "scheduled";
       const cancelBtn = canCancel
         ? `<button class="btn mini" data-act="cancel-job" data-id="${escapeHtml(j.job_id)}">取消任务</button>`
@@ -284,9 +345,7 @@ function renderJobsTable(jobs) {
 
   wrap.innerHTML = `<table>
     <thead>
-      <tr>
-        <th>任务ID</th><th>状态</th><th>执行时间</th><th>目标日期</th><th>场馆序号</th><th>时段号</th><th>操作</th>
-      </tr>
+      <tr><th>任务ID</th><th>状态</th><th>执行时间</th><th>目标日期</th><th>场馆序号</th><th>时段号</th><th>操作</th></tr>
     </thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -295,10 +354,20 @@ function renderJobsTable(jobs) {
 async function checkHealth() {
   return guarded("health", async () => {
     try {
+      const cfg = getCfg();
+      const invalid = validateApiBase(cfg.apiBase);
+      if (invalid) throw new Error(invalid);
+
       const data = await callApi("/api/health");
+      apiReady = true;
+      setOpsEnabled(true);
+      setHint(`后端连接正常: ${cfg.apiBase}`, "ok");
       setLive(true, `Online ${new Date(data.time).toLocaleTimeString()}`);
       return data;
     } catch (e) {
+      apiReady = false;
+      setOpsEnabled(false);
+      setHint(`连接不可用: ${e.message}`, "warn");
       setLive(false, `Offline: ${e.message}`);
       throw e;
     }
@@ -309,10 +378,7 @@ async function loadVenues() {
   return guarded("venues", async () => {
     const cfg = getCfg();
     const data = await callApi("/api/venues", {
-      query: {
-        campus_id: cfg.campusId,
-        ...credentialQuery(),
-      },
+      query: { campus_id: cfg.campusId, ...credentialQuery() },
     });
     renderVenues(data.venues || []);
     return data;
@@ -338,6 +404,7 @@ async function loadSlots() {
 
 async function bookOnce() {
   return guarded("book", async () => {
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
     const cfg = getCfg();
     const { venueOrder, venueName } = selectedVenue();
     const { slotIndex } = selectedSlot();
@@ -353,11 +420,7 @@ async function bookOnce() {
       captcha_retries: cfg.captchaRetries,
     };
 
-    const data = await callApi("/api/book", {
-      method: "POST",
-      body: payload,
-    });
-
+    const data = await callApi("/api/book", { method: "POST", body: payload });
     printResult(data);
     await refreshOrders();
     await refreshJobs();
@@ -367,9 +430,8 @@ async function bookOnce() {
 
 async function refreshOrders() {
   return guarded("orders", async () => {
-    const data = await callApi("/api/orders", {
-      query: credentialQuery(),
-    });
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
+    const data = await callApi("/api/orders", { query: credentialQuery() });
     renderOrdersTable(data.orders || []);
     return data;
   });
@@ -377,6 +439,7 @@ async function refreshOrders() {
 
 async function cancelOrder(orderId) {
   return guarded("cancelOrder", async () => {
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
     const cfg = getCfg();
     const data = await callApi("/api/orders/cancel", {
       method: "POST",
@@ -401,10 +464,10 @@ function normalizeRunAt(value) {
 
 async function scheduleJob() {
   return guarded("schedule", async () => {
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
+
     const runAt = normalizeRunAt($("runAt").value);
-    if (!runAt) {
-      throw new Error("请先填写执行时间");
-    }
+    if (!runAt) throw new Error("请先填写执行时间");
 
     const cfg = getCfg();
     const { venueOrder, venueName } = selectedVenue();
@@ -422,11 +485,7 @@ async function scheduleJob() {
       run_at: runAt,
     };
 
-    const data = await callApi("/api/jobs/schedule", {
-      method: "POST",
-      body: payload,
-    });
-
+    const data = await callApi("/api/jobs/schedule", { method: "POST", body: payload });
     printResult(data);
     await refreshJobs();
     return data;
@@ -435,6 +494,7 @@ async function scheduleJob() {
 
 async function refreshJobs() {
   return guarded("jobs", async () => {
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
     const data = await callApi("/api/jobs");
     renderJobsTable(data.jobs || []);
     return data;
@@ -443,9 +503,8 @@ async function refreshJobs() {
 
 async function cancelJob(jobId) {
   return guarded("cancelJob", async () => {
-    const data = await callApi(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
-      method: "POST",
-    });
+    if (!apiReady) throw new Error("后端未连通，请先测试连接");
+    const data = await callApi(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
     printResult({ cancel_job: jobId, result: data.ok });
     await refreshJobs();
     return data;
@@ -453,9 +512,7 @@ async function cancelJob(jobId) {
 }
 
 function attachEvents() {
-  $("saveConnBtn").addEventListener("click", () => {
-    saveCfg();
-  });
+  $("saveConnBtn").addEventListener("click", saveCfg);
 
   $("healthBtn").addEventListener("click", async () => {
     try {
@@ -515,7 +572,6 @@ function attachEvents() {
     if (!btn) return;
     const id = btn.dataset.id;
     if (!id) return;
-
     btn.disabled = true;
     try {
       await cancelOrder(id);
@@ -531,7 +587,6 @@ function attachEvents() {
     if (!btn) return;
     const id = btn.dataset.id;
     if (!id) return;
-
     btn.disabled = true;
     try {
       await cancelJob(id);
@@ -544,6 +599,15 @@ function attachEvents() {
 
   $("autoRefresh").addEventListener("change", startPolling);
   $("refreshMs").addEventListener("change", startPolling);
+  $("apiBase").addEventListener("change", () => {
+    const invalid = validateApiBase(getCfg().apiBase);
+    if (invalid) {
+      apiReady = false;
+      setOpsEnabled(false);
+      setHint(invalid, "warn");
+      setLive(false, "Need valid API Base");
+    }
+  });
 }
 
 function startPolling() {
@@ -553,49 +617,48 @@ function startPolling() {
   }
 
   const cfg = getCfg();
-  if (!cfg.autoRefresh) return;
+  const invalid = validateApiBase(cfg.apiBase);
+  if (!cfg.autoRefresh || invalid) return;
 
   const interval = Math.max(1000, cfg.refreshMs || 5000);
   pollTimer = setInterval(async () => {
     pollTick += 1;
     try {
       await checkHealth();
+      if (!apiReady) return;
       await refreshJobs();
       if (pollTick % Math.max(1, Math.floor(30000 / interval)) === 0) {
         await refreshOrders();
       }
     } catch (_e) {
-      // keep polling even on intermittent failures
+      // keep polling
     }
   }, interval);
 }
 
 async function initialLoad() {
+  const cfg = getCfg();
+  const invalid = validateApiBase(cfg.apiBase);
+  if (invalid) {
+    apiReady = false;
+    setOpsEnabled(false);
+    setHint(invalid, "warn");
+    setLive(false, "Need API Base");
+    printResult(`请先修正连接配置: ${invalid}`);
+    return;
+  }
+
   try {
     await checkHealth();
   } catch (e) {
     printResult(`初始连接失败: ${e.message}`);
+    return;
   }
 
   try {
     await loadVenues();
-  } catch (_e) {
-    // user can retry manually
-  }
-
-  try {
     await loadSlots();
-  } catch (_e) {
-    // user can retry manually
-  }
-
-  try {
     await refreshJobs();
-  } catch (_e) {
-    // user can retry manually
-  }
-
-  try {
     await refreshOrders();
   } catch (_e) {
     // user can retry manually
@@ -605,6 +668,7 @@ async function initialLoad() {
 async function main() {
   loadCfg();
   attachEvents();
+  setOpsEnabled(false);
   startPolling();
   await initialLoad();
 }

@@ -31,7 +31,7 @@
         <div class="grid cols-4">
           <label>
             API Base
-            <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
+            <input id="apiBase" type="text" placeholder="https://your-backend.example.com" />
           </label>
           <label>
             Access Token
@@ -62,6 +62,9 @@
             </select>
           </label>
         </div>
+        <p id="connHint" class="hint warn">
+          先填写可公网访问的后端 API Base（需支持 /api/*）。在 GitHub Pages 页面中，API Base 必须是 HTTPS。
+        </p>
       </section>
 
       <section class="card">

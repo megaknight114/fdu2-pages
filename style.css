@@ -71,6 +71,26 @@ h2 {
   font-size: 13px;
 }
 
+.hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+}
+
+.hint.warn {
+  background: rgba(181, 51, 43, 0.08);
+  border-color: rgba(181, 51, 43, 0.3);
+  color: #8e2822;
+}
+
+.hint.ok {
+  background: rgba(30, 138, 59, 0.09);
+  border-color: rgba(30, 138, 59, 0.34);
+  color: #14672c;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--line);
