@@ -1,5 +1,6 @@
 const CFG_KEY = "fdu2_web_config_v3";
 const INTERNAL_CAMPUS_ID = 2;
+const DEFAULT_API_BASE = "https://circus-plenty-sur-keys.trycloudflare.com";
 
 const busy = {
   health: false,
@@ -129,13 +130,15 @@ function saveCfg() {
 function loadCfg() {
   const raw = localStorage.getItem(CFG_KEY);
   if (!raw) {
-    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
+    setCfg({ apiBase: DEFAULT_API_BASE, autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
     return;
   }
   try {
-    setCfg(JSON.parse(raw));
+    const cfg = JSON.parse(raw);
+    if (!cfg.apiBase) cfg.apiBase = DEFAULT_API_BASE;
+    setCfg(cfg);
   } catch (_e) {
-    setCfg({ apiBase: "", autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
+    setCfg({ apiBase: DEFAULT_API_BASE, autoRefresh: true, refreshMs: 5000, useParallel: true, maxWorkers: 3 });
   }
 }
 
